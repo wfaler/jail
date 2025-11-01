@@ -208,9 +208,9 @@ func setupJailAndExec() error {
 		}
 	}
 
-	// Create workspace mount point preserving the original path structure
-	// This ensures tools like Claude that use absolute paths for project identification work correctly
-	workspaceDir := filepath.Join(tmpRoot, strings.TrimPrefix(jailDir, "/"))
+	// Create workspace mount point at /workspace/{basename}
+	// This preserves project identity while providing a clean path structure
+	workspaceDir := filepath.Join(tmpRoot, "workspace", filepath.Base(jailDir))
 	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
 		return fmt.Errorf("creating workspace: %w", err)
 	}
@@ -299,9 +299,10 @@ func setupJailAndExec() error {
 		return fmt.Errorf("chroot: %w", err)
 	}
 
-	// Change to the jail directory (preserving original path)
-	if err := os.Chdir(jailDir); err != nil {
-		return fmt.Errorf("chdir to %s: %w", jailDir, err)
+	// Change to /workspace/{basename} directory
+	workspacePath := filepath.Join("/workspace", filepath.Base(jailDir))
+	if err := os.Chdir(workspacePath); err != nil {
+		return fmt.Errorf("chdir to %s: %w", workspacePath, err)
 	}
 
 	// Resolve command path if it's not absolute
