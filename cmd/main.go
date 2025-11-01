@@ -1,0 +1,379 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+)
+
+const setupFlag = "__JAIL_SETUP__"
+
+// readJailConfig reads a .jail file and returns additional directories to bind mount
+func readJailConfig(configPath string) ([]string, error) {
+	file, err := os.Open(configPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var dirs []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		dirs = append(dirs, line)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return dirs, nil
+}
+
+func main() {
+	// Stage 2: We're inside the namespace, set up bind mounts and exec
+	if os.Getenv(setupFlag) == "1" {
+		if err := setupJailAndExec(); err != nil {
+			fmt.Fprintf(os.Stderr, "Setup error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Stage 1: Parse arguments and validate
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: %s [-d <directory>] <command> [args...]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  %s /bin/sh                  # jail in current directory\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -d /tmp/mydir /bin/sh    # jail in /tmp/mydir\n", os.Args[0])
+		os.Exit(1)
+	}
+
+	args := os.Args[1:]
+	var jailDir string
+
+	// Check for -d or --dir flag
+	if len(args) >= 2 && (args[0] == "-d" || args[0] == "--dir") {
+		jailDir = args[1]
+		args = args[2:]
+	} else {
+		// Default to current directory
+		var err error
+		jailDir, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting current directory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Error: no command specified\n")
+		os.Exit(1)
+	}
+
+	// Verify jail directory exists
+	if info, err := os.Stat(jailDir); err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "Error: %s is not a valid directory\n", jailDir)
+		os.Exit(1)
+	}
+
+	// Re-exec ourselves with namespaces enabled
+	// Pass all original arguments
+	cmd := exec.Command("/proc/self/exe", os.Args[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), setupFlag+"=1")
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		// Create new namespaces
+		Cloneflags: syscall.CLONE_NEWNS | // Mount namespace - isolate filesystem
+			syscall.CLONE_NEWUSER | // User namespace - run unprivileged
+			syscall.CLONE_NEWPID | // PID namespace - process isolation
+			syscall.CLONE_NEWUTS | // UTS namespace - hostname isolation
+			syscall.CLONE_NEWIPC, // IPC namespace
+
+		// Map current user to "root" inside namespace (but not real root!)
+		UidMappings: []syscall.SysProcIDMap{{
+			ContainerID: 0,
+			HostID:      os.Getuid(),
+			Size:        1,
+		}},
+		GidMappings: []syscall.SysProcIDMap{{
+			ContainerID: 0,
+			HostID:      os.Getgid(),
+			Size:        1,
+		}},
+
+		// Prevent gaining privileges
+		AmbientCaps: []uintptr{},
+	}
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func setupJailAndExec() error {
+	// Parse arguments same as main()
+	var jailDir string
+	var cmdName string
+	var cmdArgs []string
+
+	args := os.Args[1:]
+
+	// Check for -d or --dir flag
+	if len(args) >= 2 && (args[0] == "-d" || args[0] == "--dir") {
+		jailDir = args[1]
+		args = args[2:]
+	} else {
+		// Default to current directory (but we need the original path before namespace)
+		// This should have been set by stage 1, use absolute path
+		var err error
+		jailDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getting current directory: %w", err)
+		}
+	}
+
+	cmdName = args[0]
+	cmdArgs = args[1:]
+
+	// Make jail directory absolute
+	jailDir, err := filepath.Abs(jailDir)
+	if err != nil {
+		return fmt.Errorf("getting absolute path: %w", err)
+	}
+
+	// Critical: Make all mounts private to prevent propagation issues
+	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("making root mount private: %w", err)
+	}
+
+	// Create a temporary root directory structure
+	tmpRoot, err := os.MkdirTemp("", "jail-root-")
+	if err != nil {
+		return fmt.Errorf("creating temp root: %w", err)
+	}
+	defer os.RemoveAll(tmpRoot)
+
+	// Directories to bind mount from host (read-only access to tools)
+	bindDirs := []string{
+		"/bin",
+		"/usr",
+		"/lib",
+		"/lib64",
+		"/sbin",
+		"/etc", // Needed for DNS resolution and network configs
+	}
+
+	// Read additional directories from .jail file if it exists
+	jailConfigFile := filepath.Join(jailDir, ".jail")
+	if extraDirs, err := readJailConfig(jailConfigFile); err == nil {
+		bindDirs = append(bindDirs, extraDirs...)
+	}
+
+	// Create mount points in temp root and bind mount system directories
+	for _, dir := range bindDirs {
+		// Check if source exists on host
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue // Skip if doesn't exist on this system
+		}
+
+		targetDir := filepath.Join(tmpRoot, dir)
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return fmt.Errorf("creating mount point %s: %w", targetDir, err)
+		}
+
+		// Bind mount (read-only)
+		if err := syscall.Mount(dir, targetDir, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+			return fmt.Errorf("bind mounting %s: %w", dir, err)
+		}
+
+		// Make it read-only
+		if err := syscall.Mount("", targetDir, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY|syscall.MS_REC, ""); err != nil {
+			return fmt.Errorf("remounting %s as read-only: %w", dir, err)
+		}
+	}
+
+	// Create workspace mount point preserving the original path structure
+	// This ensures tools like Claude that use absolute paths for project identification work correctly
+	workspaceDir := filepath.Join(tmpRoot, strings.TrimPrefix(jailDir, "/"))
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		return fmt.Errorf("creating workspace: %w", err)
+	}
+
+	if err := syscall.Mount(jailDir, workspaceDir, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind mounting workspace: %w", err)
+	}
+
+	// Mount ~/.claude directory and ~/.claude.json file from host to preserve login state
+	// Note: HOME is still /home/$USER inside jail, not /root
+	hostHome := os.Getenv("HOME")
+	if hostHome != "" {
+		// Mount ~/.claude directory
+		hostClaudeDir := filepath.Join(hostHome, ".claude")
+		if _, err := os.Stat(hostClaudeDir); err == nil {
+			jailClaudeDir := filepath.Join(tmpRoot, strings.TrimPrefix(hostHome, "/"), ".claude")
+			if err := os.MkdirAll(jailClaudeDir, 0755); err != nil {
+				return fmt.Errorf("creating %s/.claude: %w", hostHome, err)
+			}
+
+			// Bind mount (read-write for login persistence)
+			if err := syscall.Mount(hostClaudeDir, jailClaudeDir, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+				return fmt.Errorf("bind mounting .claude: %w", err)
+			}
+		}
+
+		// Mount ~/.claude.json file
+		hostClaudeJSON := filepath.Join(hostHome, ".claude.json")
+		if _, err := os.Stat(hostClaudeJSON); err == nil {
+			jailClaudeJSON := filepath.Join(tmpRoot, strings.TrimPrefix(hostHome, "/"), ".claude.json")
+			// Create parent directory if it doesn't exist
+			if err := os.MkdirAll(filepath.Dir(jailClaudeJSON), 0755); err != nil {
+				return fmt.Errorf("creating parent dir for .claude.json: %w", err)
+			}
+			// Create empty file to mount over
+			if err := os.WriteFile(jailClaudeJSON, []byte{}, 0600); err != nil {
+				return fmt.Errorf("creating .claude.json mount point: %w", err)
+			}
+
+			// Bind mount the file
+			if err := syscall.Mount(hostClaudeJSON, jailClaudeJSON, "", syscall.MS_BIND, ""); err != nil {
+				return fmt.Errorf("bind mounting .claude.json: %w", err)
+			}
+		}
+	}
+
+	// Mount XDG_RUNTIME_DIR for runtime data (needed by some tools like Claude)
+	xdgRuntimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if xdgRuntimeDir != "" {
+		if _, err := os.Stat(xdgRuntimeDir); err == nil {
+			jailRuntimeDir := filepath.Join(tmpRoot, strings.TrimPrefix(xdgRuntimeDir, "/"))
+			if err := os.MkdirAll(jailRuntimeDir, 0700); err != nil {
+				return fmt.Errorf("creating %s: %w", xdgRuntimeDir, err)
+			}
+
+			// Bind mount (read-write for runtime data)
+			if err := syscall.Mount(xdgRuntimeDir, jailRuntimeDir, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+				return fmt.Errorf("bind mounting XDG_RUNTIME_DIR: %w", err)
+			}
+		}
+	}
+
+	// Create essential directories
+	essentialDirs := []string{"/proc", "/dev", "/tmp"}
+	for _, dir := range essentialDirs {
+		targetDir := filepath.Join(tmpRoot, dir)
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
+		}
+	}
+
+	// Mount /proc (needed for many commands)
+	procDir := filepath.Join(tmpRoot, "proc")
+	if err := syscall.Mount("proc", procDir, "proc", 0, ""); err != nil {
+		return fmt.Errorf("mounting proc: %w", err)
+	}
+
+	// Bind mount /dev from host
+	devDir := filepath.Join(tmpRoot, "dev")
+	if err := syscall.Mount("/dev", devDir, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind mounting /dev: %w", err)
+	}
+
+	// Chroot into temp root
+	if err := syscall.Chroot(tmpRoot); err != nil {
+		return fmt.Errorf("chroot: %w", err)
+	}
+
+	// Change to the jail directory (preserving original path)
+	if err := os.Chdir(jailDir); err != nil {
+		return fmt.Errorf("chdir to %s: %w", jailDir, err)
+	}
+
+	// Resolve command path if it's not absolute
+	resolvedCmd, err := resolveCommand(cmdName, bindDirs)
+	if err != nil {
+		return fmt.Errorf("finding command %s: %w", cmdName, err)
+	}
+
+	// Ensure HOME is set correctly so Claude can find its config at $HOME/.claude
+	env := os.Environ()
+	if hostHome != "" {
+		env = setOrUpdateEnv(env, "HOME", hostHome)
+	}
+
+	// Execute the actual command
+	if err := syscall.Exec(resolvedCmd, append([]string{cmdName}, cmdArgs...), env); err != nil {
+		return fmt.Errorf("exec %s: %w", cmdName, err)
+	}
+
+	return nil
+}
+
+// setOrUpdateEnv updates an environment variable in the env slice, or adds it if not present
+func setOrUpdateEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	newEntry := prefix + value
+
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = newEntry
+			return env
+		}
+	}
+
+	return append(env, newEntry)
+}
+
+// resolveCommand finds the full path to a command by searching standard directories
+func resolveCommand(cmdName string, searchDirs []string) (string, error) {
+	// If it's already an absolute path or contains a slash, use it as-is
+	if filepath.IsAbs(cmdName) || strings.Contains(cmdName, "/") {
+		return cmdName, nil
+	}
+
+	// Search in common executable directories
+	pathDirs := []string{
+		"/bin",
+		"/usr/bin",
+		"/sbin",
+		"/usr/sbin",
+		"/usr/local/bin",
+	}
+
+	// Add any custom directories from searchDirs that might contain executables
+	for _, dir := range searchDirs {
+		// Add the directory itself
+		pathDirs = append(pathDirs, dir)
+		// Also check common subdirectories
+		pathDirs = append(pathDirs, filepath.Join(dir, "bin"))
+		pathDirs = append(pathDirs, filepath.Join(dir, "shims"))
+	}
+
+	// Search for the executable
+	for _, dir := range pathDirs {
+		candidatePath := filepath.Join(dir, cmdName)
+		if info, err := os.Stat(candidatePath); err == nil && !info.IsDir() {
+			// Check if executable
+			if info.Mode()&0111 != 0 {
+				return candidatePath, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("command not found in PATH")
+}
