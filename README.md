@@ -1,6 +1,14 @@
 # Jail
 
 A lightweight Linux process isolation tool that provides filesystem jailing without requiring root privileges.
+Allows you to run any app with full access to your local dev toolchain and project directory, without any access outside said directory, or privileged access to your system.
+
+Example:
+```bash
+
+jail claude
+
+```
 
 ## Overview
 
