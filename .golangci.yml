@@ -1,0 +1,233 @@
+# golangci-lint configuration for jail project
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  # Timeout for analysis
+  timeout: 5m
+
+  # Enable tests analysis
+  tests: true
+
+  # Build tags to use
+  build-tags:
+    - integration
+
+linters:
+  enable:
+    # Enabled by default
+    - errcheck      # Check for unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Reports suspicious constructs
+    - ineffassign   # Detect ineffectual assignments
+    - staticcheck   # Advanced static analysis
+    - unused        # Check for unused constants, variables, functions and types
+
+    # Additional useful linters
+    - gofmt         # Check code is gofmt-ed
+    - goimports     # Check imports are formatted
+    - misspell      # Check for misspelled English words
+    - revive        # Fast, configurable, extensible, flexible linter
+    - gosec         # Security-focused linter
+    - unconvert     # Remove unnecessary type conversions
+    - unparam       # Find unused function parameters
+    - goconst       # Find repeated strings that could be constants
+    - gocyclo       # Compute cyclomatic complexity
+    - gocognit      # Compute cognitive complexity
+    - dupl          # Find duplicate code
+    - bodyclose     # Check HTTP response body is closed
+    - errorlint     # Find code that will cause problems with Go 1.13+ error wrapping
+    - copyloopvar   # Check for pointers to enclosing loop variables (replaces exportloopref)
+    - gocritic      # Provides diagnostics that check for bugs, performance and style issues
+    - goprintffuncname # Check printf-like functions are named correctly
+    - noctx         # Find HTTP requests without context
+    - stylecheck    # Replacement for golint
+    - whitespace    # Check for unnecessary whitespace
+    - predeclared   # Check for shadowing of predeclared identifiers
+
+  disable:
+    - typecheck     # Can conflict with build tags
+
+linters-settings:
+  errcheck:
+    # Report about not checking of errors in type assertions: `a := b.(MyStruct)`;
+    check-type-assertions: true
+    # Report about assignment of errors to blank identifier: `num, _ := strconv.Atoi(numStr)`;
+    check-blank: false
+
+  govet:
+    # Enable all analyzers
+    enable-all: true
+    # Disable specific analyzers
+    disable:
+      - shadow  # Reports shadowed variables (can be too strict)
+
+  gofmt:
+    # Simplify code: gofmt with `-s` option
+    simplify: true
+
+  goimports:
+    # Put imports beginning with prefix after 3rd-party packages
+    local-prefixes: github.com/wfaler/jail
+
+  gocyclo:
+    # Minimal cyclomatic complexity to report
+    min-complexity: 15
+
+  gocognit:
+    # Minimal cognitive complexity to report
+    min-complexity: 20
+
+  dupl:
+    # Tokens count to trigger issue
+    threshold: 100
+
+  goconst:
+    # Minimal length of string constant
+    min-len: 3
+    # Minimum occurrences to trigger
+    min-occurrences: 3
+    # Ignore test files
+    ignore-tests: true
+
+  misspell:
+    # Locale to use
+    locale: US
+
+  revive:
+    # Enable all available rules
+    enable-all-rules: false
+    rules:
+      # Enabled rules
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  gosec:
+    # Select which security checks to run
+    includes:
+      - G101 # Look for hardcoded credentials
+      - G102 # Bind to all interfaces
+      - G103 # Audit the use of unsafe block
+      - G104 # Audit errors not checked
+      - G106 # Audit the use of ssh.InsecureIgnoreHostKey
+      - G107 # Url provided to HTTP request as taint input
+      - G201 # SQL query construction using format string
+      - G202 # SQL query construction using string concatenation
+      - G203 # Use of unescaped data in HTML templates
+      - G204 # Audit use of command execution
+      - G301 # Poor file permissions used when creating a directory
+      - G302 # Poor file permissions used with chmod
+      - G303 # Creating tempfile using a predictable path
+      - G304 # File path provided as taint input
+      - G305 # File traversal when extracting zip archive
+      - G306 # Poor file permissions used when writing to a file
+      - G307 # Deferring a method which returns an error
+      - G401 # Detect the usage of DES, RC4, MD5 or SHA1
+      - G402 # Look for bad TLS connection settings
+      - G403 # Ensure minimum RSA key length of 2048 bits
+      - G404 # Insecure random number source (rand)
+      - G501 # Import blocklist: crypto/md5
+      - G502 # Import blocklist: crypto/des
+      - G503 # Import blocklist: crypto/rc4
+      - G504 # Import blocklist: net/http/cgi
+      - G505 # Import blocklist: crypto/sha1
+      - G601 # Implicit memory aliasing of items from a range statement
+    excludes:
+      - G204 # Subprocess launched with variable - expected for jail
+
+  stylecheck:
+    # Enable all checks
+    checks: ["all"]
+
+  unparam:
+    # Inspect exported functions
+    check-exported: false
+
+issues:
+  # Maximum issues count per linter
+  max-issues-per-linter: 0
+
+  # Maximum count of issues with the same text
+  max-same-issues: 0
+
+  # Which dirs to exclude
+  exclude-dirs:
+    - vendor
+    - third_party
+
+  # Which files to exclude
+  exclude-files:
+    - ".*\\.pb\\.go$"
+
+  # Make issues output unique by line
+  uniq-by-line: true
+
+  # Excluding configuration per-path, per-linter, per-text and per-source
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - goconst
+        - gocognit
+
+    # Exclude shadow checking on the variable named 'err'
+    - text: 'shadow: declaration of "err"'
+      linters:
+        - govet
+
+    # Exclude linters for integration tests
+    - path: integration_test\.go
+      linters:
+        - errcheck
+        - gosec
+
+    # Allow subprocess execution in main.go (it's the point of the tool)
+    - path: main\.go
+      text: "G204:"
+      linters:
+        - gosec
+
+  # Show all issues from a linter
+  exclude-use-default: false
+
+  # Fix found issues (if supported by linter)
+  fix: false
+
+output:
+  # Formats: colored-line-number|line-number|json|tab|checkstyle|code-climate|junit-xml|github-actions
+  formats:
+    - format: colored-line-number
+
+  # Print lines of code with issue
+  print-issued-lines: true
+
+  # Print linter name in the end of issue text
+  print-linter-name: true
+
+  # Sort results by: filepath, line and column
+  sort-results: true

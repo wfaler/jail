@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,13 +13,56 @@ import (
 
 const setupFlag = "__JAIL_SETUP__"
 
+// jailArgs represents parsed command-line arguments
+type jailArgs struct {
+	jailDir string
+	cmdName string
+	cmdArgs []string
+}
+
+// parseArgs parses command-line arguments and returns the jail configuration
+func parseArgs(args []string) (*jailArgs, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("no command specified")
+	}
+
+	result := &jailArgs{}
+	remainingArgs := args
+
+	// Check for -d or --dir flag
+	if len(remainingArgs) >= 2 && (remainingArgs[0] == "-d" || remainingArgs[0] == "--dir") {
+		result.jailDir = remainingArgs[1]
+		remainingArgs = remainingArgs[2:]
+	} else {
+		// Default to current directory
+		var err error
+		result.jailDir, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("getting current directory: %w", err)
+		}
+	}
+
+	if len(remainingArgs) == 0 {
+		return nil, fmt.Errorf("no command specified")
+	}
+
+	result.cmdName = remainingArgs[0]
+	result.cmdArgs = remainingArgs[1:]
+
+	return result, nil
+}
+
 // readJailConfig reads a .jail file and returns additional directories to bind mount
 func readJailConfig(configPath string) ([]string, error) {
-	file, err := os.Open(configPath)
+	file, err := os.Open(configPath) //nolint:gosec // Config file path comes from workspace directory
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	var dirs []string
 	scanner := bufio.NewScanner(file)
@@ -57,27 +101,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	args := os.Args[1:]
-	var jailDir string
-
-	// Check for -d or --dir flag
-	if len(args) >= 2 && (args[0] == "-d" || args[0] == "--dir") {
-		jailDir = args[1]
-		args = args[2:]
-	} else {
-		// Default to current directory
-		var err error
-		jailDir, err = os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting current directory: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Error: no command specified\n")
+	parsedArgs, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	jailDir := parsedArgs.jailDir
 
 	// Verify jail directory exists
 	if info, err := os.Stat(jailDir); err != nil || !info.IsDir() {
@@ -118,7 +147,8 @@ func main() {
 	}
 
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			os.Exit(exitErr.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -126,33 +156,20 @@ func main() {
 	}
 }
 
+//nolint:gocognit,gocyclo // Complex namespace setup is inherently complex
 func setupJailAndExec() error {
 	// Parse arguments same as main()
-	var jailDir string
-	var cmdName string
-	var cmdArgs []string
-
-	args := os.Args[1:]
-
-	// Check for -d or --dir flag
-	if len(args) >= 2 && (args[0] == "-d" || args[0] == "--dir") {
-		jailDir = args[1]
-		args = args[2:]
-	} else {
-		// Default to current directory (but we need the original path before namespace)
-		// This should have been set by stage 1, use absolute path
-		var err error
-		jailDir, err = os.Getwd()
-		if err != nil {
-			return fmt.Errorf("getting current directory: %w", err)
-		}
+	parsedArgs, err := parseArgs(os.Args[1:])
+	if err != nil {
+		return fmt.Errorf("parsing arguments: %w", err)
 	}
 
-	cmdName = args[0]
-	cmdArgs = args[1:]
+	jailDir := parsedArgs.jailDir
+	cmdName := parsedArgs.cmdName
+	cmdArgs := parsedArgs.cmdArgs
 
 	// Make jail directory absolute
-	jailDir, err := filepath.Abs(jailDir)
+	jailDir, err = filepath.Abs(jailDir)
 	if err != nil {
 		return fmt.Errorf("getting absolute path: %w", err)
 	}
@@ -167,7 +184,11 @@ func setupJailAndExec() error {
 	if err != nil {
 		return fmt.Errorf("creating temp root: %w", err)
 	}
-	defer os.RemoveAll(tmpRoot)
+	defer func() {
+		if rmErr := os.RemoveAll(tmpRoot); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to clean up temp root %s: %v\n", tmpRoot, rmErr)
+		}
+	}()
 
 	// Directories to bind mount from host (read-only access to tools)
 	bindDirs := []string{
@@ -193,7 +214,7 @@ func setupJailAndExec() error {
 		}
 
 		targetDir := filepath.Join(tmpRoot, dir)
-		if err := os.MkdirAll(targetDir, 0755); err != nil {
+		if err := os.MkdirAll(targetDir, 0755); err != nil { //nolint:gosec,mnd // 0755 is appropriate for directory permissions
 			return fmt.Errorf("creating mount point %s: %w", targetDir, err)
 		}
 
@@ -211,7 +232,7 @@ func setupJailAndExec() error {
 	// Create workspace mount point at /workspace/{basename}
 	// This preserves project identity while providing a clean path structure
 	workspaceDir := filepath.Join(tmpRoot, "workspace", filepath.Base(jailDir))
-	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil { //nolint:gosec,mnd // 0755 is appropriate for directory permissions
 		return fmt.Errorf("creating workspace: %w", err)
 	}
 
@@ -227,7 +248,7 @@ func setupJailAndExec() error {
 		hostClaudeDir := filepath.Join(hostHome, ".claude")
 		if _, err := os.Stat(hostClaudeDir); err == nil {
 			jailClaudeDir := filepath.Join(tmpRoot, strings.TrimPrefix(hostHome, "/"), ".claude")
-			if err := os.MkdirAll(jailClaudeDir, 0755); err != nil {
+			if err := os.MkdirAll(jailClaudeDir, 0755); err != nil { //nolint:gosec,mnd // 0755 is appropriate for directory permissions
 				return fmt.Errorf("creating %s/.claude: %w", hostHome, err)
 			}
 
@@ -242,7 +263,7 @@ func setupJailAndExec() error {
 		if _, err := os.Stat(hostClaudeJSON); err == nil {
 			jailClaudeJSON := filepath.Join(tmpRoot, strings.TrimPrefix(hostHome, "/"), ".claude.json")
 			// Create parent directory if it doesn't exist
-			if err := os.MkdirAll(filepath.Dir(jailClaudeJSON), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(jailClaudeJSON), 0755); err != nil { //nolint:gosec,mnd // 0755 is appropriate for directory permissions
 				return fmt.Errorf("creating parent dir for .claude.json: %w", err)
 			}
 			// Create empty file to mount over
@@ -262,7 +283,7 @@ func setupJailAndExec() error {
 	if xdgRuntimeDir != "" {
 		if _, err := os.Stat(xdgRuntimeDir); err == nil {
 			jailRuntimeDir := filepath.Join(tmpRoot, strings.TrimPrefix(xdgRuntimeDir, "/"))
-			if err := os.MkdirAll(jailRuntimeDir, 0700); err != nil {
+			if err := os.MkdirAll(jailRuntimeDir, 0700); err != nil { //nolint:gosec,mnd // 0700 is appropriate for runtime directory permissions
 				return fmt.Errorf("creating %s: %w", xdgRuntimeDir, err)
 			}
 
@@ -277,7 +298,7 @@ func setupJailAndExec() error {
 	essentialDirs := []string{"/proc", "/dev", "/tmp"}
 	for _, dir := range essentialDirs {
 		targetDir := filepath.Join(tmpRoot, dir)
-		if err := os.MkdirAll(targetDir, 0755); err != nil {
+		if err := os.MkdirAll(targetDir, 0755); err != nil { //nolint:gosec,mnd // 0755 is appropriate for directory permissions
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
 	}
