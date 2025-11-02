@@ -139,7 +139,7 @@ dev-setup: install-tools ## Setup development environment
 	go mod tidy
 	@echo "✓ Development environment ready"
 
-verify: build test lint ## Verify code is ready to commit (build, test, lint)
+verify: build test test-integration lint ## Verify code is ready to commit (build, test, lint)
 	@echo "✓ Code verification complete - ready to commit"
 
 run-example: build ## Build and run an example command
