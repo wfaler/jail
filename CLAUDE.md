@@ -44,7 +44,10 @@ The application uses a two-stage execution pattern implemented in `cmd/main.go`:
 - Mounts Docker socket if available (non-fatal if Docker is not running)
 - Preserves `DOCKER_HOST` environment variable for Docker CLI
 
-**Configuration File** (`.jail`): Reads additional directories to mount from `.jail` file in workspace. Each line is an absolute path. Lines starting with `#` are comments.
+**Configuration Files**: Reads additional directories to mount from two `.jail` files:
+- Global: `$HOME/.jail` - applies to all jailed processes (read first)
+- Local: `<workspace>/.jail` - applies to specific workspace (read second, can add to or override global)
+Each line is an absolute path. Lines starting with `#` are comments. Both configs are merged with global mounts first, then local additions.
 
 **Command Resolution** (lines 343-380): Searches for executables in standard paths plus any custom directories from `.jail` file. Checks directories and their `bin/` and `shims/` subdirectories.
 

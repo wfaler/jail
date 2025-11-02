@@ -74,20 +74,31 @@ jail docker run --rm alpine echo "Hello from Docker"
 
 ### `.jail` File
 
-Create a `.jail` file in your workspace directory to mount additional directories into the jail. This is useful for non-standard tool locations (e.g., mise, asdf, custom installations).
+Jail supports two configuration files for mounting additional directories:
+
+1. **Global config**: `$HOME/.jail` - applies to all jailed processes
+2. **Local config**: `<workspace>/.jail` - applies only to that workspace
+
+Both configs are merged, with the local config additions coming after global ones. This allows you to define common mounts globally while adding project-specific mounts locally.
 
 **Format:**
 - One absolute path per line
 - Lines starting with `#` are comments
 - Empty lines are ignored
 
-**Example `.jail` file:**
+**Example global `$HOME/.jail` file:**
 ```
-# Mise tool manager
+# Mise tool manager (used across all projects)
 /home/user/.local/share/mise
 /home/user/.config/mise
 
-# Custom toolchain
+# Docker configuration
+/home/user/.docker
+```
+
+**Example workspace `.jail` file:**
+```
+# Custom toolchain for this project only
 /opt/custom-tools
 
 # Additional libraries
@@ -115,7 +126,7 @@ Create a `.jail` file in your workspace directory to mount additional directorie
 - Requires Docker to be installed and running on the host
 
 ### Custom Directories
-Any paths listed in `.jail` file (read-only by default)
+Any paths listed in `$HOME/.jail` (global) or `<workspace>/.jail` (local) files (read-only by default)
 
 ## Security Model
 
@@ -183,7 +194,7 @@ Any paths listed in `.jail` file (read-only by default)
 - Cannot create devices: Not supported in user namespaces
 
 ### Mise/asdf tools not working
-Add both the tool directory and config directory to `.jail`:
+Add both the tool directory and config directory to `$HOME/.jail` (for all projects) or workspace `.jail` (for one project):
 ```
 /home/user/.local/share/mise
 /home/user/.config/mise

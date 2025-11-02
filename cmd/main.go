@@ -270,7 +270,16 @@ func setupJailAndExec() error {
 		"/etc", // Needed for DNS resolution and network configs
 	}
 
-	// Read additional directories from .jail file if it exists
+	// Read global .jail config from $HOME/.jail if it exists
+	if hostHome := os.Getenv("HOME"); hostHome != "" {
+		globalConfigFile := filepath.Join(hostHome, ".jail")
+		if extraDirs, err := readJailConfig(globalConfigFile); err == nil {
+			bindDirs = append(bindDirs, extraDirs...)
+		}
+	}
+
+	// Read additional directories from workspace .jail file if it exists
+	// This allows local config to add to or override global config
 	jailConfigFile := filepath.Join(jailDir, ".jail")
 	if extraDirs, err := readJailConfig(jailConfigFile); err == nil {
 		bindDirs = append(bindDirs, extraDirs...)
