@@ -32,13 +32,19 @@ The application uses a two-stage execution pattern implemented in `cmd/main.go`:
 
 **Workspace Mounting** (lines 211-220): The jail directory is mounted at `/workspace/{basename}` (preserving the directory name for context) rather than directly at root to provide a clean, isolated workspace view.
 
-**Claude Integration** (lines 222-274): Special handling for Claude Code integration:
+**Claude Integration** (lines 237-295): Special handling for Claude Code integration:
 - Mounts `~/.claude` directory (read-write) to preserve authentication state
 - Mounts `~/.claude.json` file directly (requires creating mount point first)
 - Mounts `XDG_RUNTIME_DIR` for runtime data
 - Preserves HOME environment variable so Claude finds config at `$HOME/.claude`
 
-**Configuration File** (`.jail`, lines 15-39, 183-186): Reads additional directories to mount from `.jail` file in workspace. Each line is an absolute path. Lines starting with `#` are comments.
+**Docker Support** (lines 159-227): Automatic Docker socket detection and mounting:
+- Detects Docker socket from `DOCKER_HOST` environment variable or standard locations
+- Supports `/var/run/docker.sock`, `/run/docker.sock`, and rootless Docker
+- Mounts Docker socket if available (non-fatal if Docker is not running)
+- Preserves `DOCKER_HOST` environment variable for Docker CLI
+
+**Configuration File** (`.jail`): Reads additional directories to mount from `.jail` file in workspace. Each line is an absolute path. Lines starting with `#` are comments.
 
 **Command Resolution** (lines 343-380): Searches for executables in standard paths plus any custom directories from `.jail` file. Checks directories and their `bin/` and `shims/` subdirectories.
 
@@ -60,6 +66,7 @@ go build -o jail ./cmd/main.go
 # Examples
 ./jail /bin/bash
 ./jail -d /tmp/project python3 app.py
+./jail docker ps  # Docker support (auto-detected)
 ```
 
 ### Testing in Development

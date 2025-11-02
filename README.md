@@ -56,6 +56,10 @@ echo "console.log('hello')" | jail node
 
 # Run Python script
 jail -d /home/user/project python3 app.py
+
+# Use Docker inside jail
+jail docker ps
+jail docker run --rm alpine echo "Hello from Docker"
 ```
 
 ## Configuration
@@ -96,6 +100,11 @@ Create a `.jail` file in your workspace directory to mount additional directorie
 - `/dev` - Device files
 - `/tmp` - Temporary files (isolated)
 - `/workspace` - Your workspace directory (read-write)
+
+### Docker Support
+- Docker socket (auto-detected from `DOCKER_HOST` or standard locations)
+- Allows running Docker commands inside jail
+- Requires Docker to be installed and running on the host
 
 ### Custom Directories
 Any paths listed in `.jail` file (read-only by default)

@@ -156,6 +156,76 @@ func main() {
 	}
 }
 
+// getDockerSocketPath detects the Docker socket location from environment or common paths
+func getDockerSocketPath() string {
+	// Check DOCKER_HOST environment variable
+	if dockerHost := os.Getenv("DOCKER_HOST"); dockerHost != "" {
+		// DOCKER_HOST can be unix:///path/to/socket or just /path/to/socket
+		if strings.HasPrefix(dockerHost, "unix://") {
+			return strings.TrimPrefix(dockerHost, "unix://")
+		}
+		// If it's a file path (starts with /), use it directly
+		if strings.HasPrefix(dockerHost, "/") {
+			return dockerHost
+		}
+	}
+
+	// Check common Docker socket locations
+	commonPaths := []string{
+		"/var/run/docker.sock", // Standard Linux location
+		"/run/docker.sock",     // Alternative Linux location
+		filepath.Join(os.Getenv("HOME"), ".docker", "run", "docker.sock"), // Rootless Docker
+	}
+
+	for _, path := range commonPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+
+	return ""
+}
+
+// mountDockerSocket mounts the Docker socket into the jail for Docker support
+func mountDockerSocket(tmpRoot string) error {
+	dockerSocketPath := getDockerSocketPath()
+	if dockerSocketPath == "" {
+		return fmt.Errorf("docker socket not found")
+	}
+
+	// Verify the socket exists and is accessible
+	info, err := os.Stat(dockerSocketPath)
+	if err != nil {
+		return fmt.Errorf("docker socket at %s not accessible: %w", dockerSocketPath, err)
+	}
+
+	// Verify it's a socket
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("docker socket at %s is not a socket", dockerSocketPath)
+	}
+
+	// Create the parent directory structure in the jail
+	jailSocketPath := filepath.Join(tmpRoot, strings.TrimPrefix(dockerSocketPath, "/"))
+	jailSocketDir := filepath.Dir(jailSocketPath)
+
+	if err := os.MkdirAll(jailSocketDir, 0755); err != nil { //nolint:gosec,mnd // 0755 is appropriate for directory permissions
+		return fmt.Errorf("creating docker socket directory %s: %w", jailSocketDir, err)
+	}
+
+	// Create an empty file to bind mount over (sockets can't be created directly)
+	// We use a regular file as the mount point
+	if err := os.WriteFile(jailSocketPath, []byte{}, 0666); err != nil { //nolint:gosec,mnd // Will inherit actual socket permissions
+		return fmt.Errorf("creating docker socket mount point: %w", err)
+	}
+
+	// Bind mount the socket
+	if err := syscall.Mount(dockerSocketPath, jailSocketPath, "", syscall.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind mounting docker socket: %w", err)
+	}
+
+	return nil
+}
+
 //nolint:gocognit,gocyclo // Complex namespace setup is inherently complex
 func setupJailAndExec() error {
 	// Parse arguments same as main()
@@ -292,6 +362,13 @@ func setupJailAndExec() error {
 				return fmt.Errorf("bind mounting XDG_RUNTIME_DIR: %w", err)
 			}
 		}
+	}
+
+	// Mount Docker socket for Docker support
+	if err := mountDockerSocket(tmpRoot); err != nil {
+		// Non-fatal: Docker might not be installed or running
+		// Don't return error, just log warning to stderr
+		fmt.Fprintf(os.Stderr, "Warning: Docker socket not mounted: %v\n", err)
 	}
 
 	// Create essential directories
