@@ -51,7 +51,7 @@ jail -d <directory> <command> [args...]
 This is likely due to SELinux/AppArmor not allowing unprivileged namespaces, especially on Ubuntu based systems.
 There are two potential fixes for this:
 
-#### Option 1: Enable Unprivileged User Namespaces (Recommended for Development)
+#### Option 1: Enable Unprivileged User Namespaces
 ```
 # Temporarily (until reboot)
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
