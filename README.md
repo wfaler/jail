@@ -47,6 +47,45 @@ jail <command> [args...]
 jail -d <directory> <command> [args...]
 ```
 
+### Help, I get "Error: fork/exec /proc/self/exe: permission denied" when I run jail!
+This is likely due to SELinux/AppArmor not allowing unprivileged namespaces, especially on Ubuntu based systems.
+There are two potential fixes for this:
+
+#### Option 1: Enable Unprivileged User Namespaces (Recommended for Development)
+```
+# Temporarily (until reboot)
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+# Permanently
+echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | sudo tee /etc/sysctl.d/99-enable-unpriv-userns.conf
+sudo sysctl -p /etc/sysctl.d/99-enable-unpriv-userns.conf
+```
+#### Option 2 (recommended): Create an App Armor profile for Jail
+```
+# Create profile
+sudo tee /etc/apparmor.d/jail << 'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+/path/to/your/jail {
+  include <abstractions/base>
+  capability sys_admin,
+  capability sys_chroot,
+  
+  # Allow namespace creation
+  userns,
+  
+  # Allow re-exec
+  /proc/self/exe r,
+  
+  # Allow executing itself
+  /path/to/your/jail rix,
+}
+EOF
+
+# Load the profile
+sudo apparmor_parser -r /etc/apparmor.d/jail
+```
 ### Examples
 
 ```bash
