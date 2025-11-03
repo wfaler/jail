@@ -46,6 +46,28 @@ jail <command> [args...]
 # Run command with specified workspace directory
 jail -d <directory> <command> [args...]
 ```
+### Examples
+
+```bash
+# Start a shell in current directory
+jail /bin/bash
+
+# Run a shell in specific directory
+jail -d /tmp/myproject /bin/bash
+
+# Execute a command with arguments
+jail node index.js
+
+# Use with pipes and redirects
+echo "console.log('hello')" | jail node
+
+# Run Python script
+jail -d /home/user/project python3 app.py
+
+# Use Docker inside jail
+jail docker ps
+jail docker run --rm alpine echo "Hello from Docker"
+```
 
 ### Help, I get "Error: fork/exec /proc/self/exe: permission denied" when I run jail!
 This is likely due to SELinux/AppArmor not allowing unprivileged namespaces, especially on Ubuntu based systems.
@@ -85,28 +107,6 @@ EOF
 
 # Load the profile
 sudo apparmor_parser -r /etc/apparmor.d/jail
-```
-### Examples
-
-```bash
-# Start a shell in current directory
-jail /bin/bash
-
-# Run a shell in specific directory
-jail -d /tmp/myproject /bin/bash
-
-# Execute a command with arguments
-jail node index.js
-
-# Use with pipes and redirects
-echo "console.log('hello')" | jail node
-
-# Run Python script
-jail -d /home/user/project python3 app.py
-
-# Use Docker inside jail
-jail docker ps
-jail docker run --rm alpine echo "Hello from Docker"
 ```
 
 ## Configuration
