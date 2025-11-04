@@ -254,11 +254,15 @@ func setupJailAndExec() error {
 	if err != nil {
 		return fmt.Errorf("creating temp root: %w", err)
 	}
-	defer func() {
-		if rmErr := os.RemoveAll(tmpRoot); rmErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to clean up temp root %s: %v\n", tmpRoot, rmErr)
-		}
-	}()
+	// NOTE: We deliberately do NOT clean up tmpRoot with os.RemoveAll()
+	// because:
+	// 1. We use syscall.Exec() to replace this process, so defer won't run anyway
+	// 2. The mount namespace is automatically cleaned up by the kernel when the
+	//    process exits, which unmounts all bind mounts safely
+	// 3. Explicitly calling os.RemoveAll() is dangerous - if bind mounts aren't
+	//    properly unmounted first, it could traverse into bind-mounted directories
+	//    and delete real host files (e.g., if ~/bin is in .jail, it could delete
+	//    the actual ~/bin directory on the host)
 
 	// Directories to bind mount from host (read-only access to tools)
 	bindDirs := []string{
